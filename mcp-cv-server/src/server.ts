@@ -7,28 +7,21 @@ import path from "node:path";
 import nodemailer from "nodemailer";
 import { randomUUID } from "node:crypto";
 
-// Add type annotations for Express
-import type { Request, Response } from "express";
-import { z } from "zod";
-
-// MCP v1.x imports
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import cors from "cors";
+import { z } from "zod";
 
 // ------------------------------
-// Types & tiny resume helpers
+// Minimal resume helpers
 // ------------------------------
 type WorkItem = {
   title: string;
   company: string;
   location?: string;
   start?: string; // YYYY-MM
-  end?: string; // YYYY-MM | "Present" | "Scheduled"
+  end?: string;   // YYYY-MM | "Present" | "Scheduled"
   summary?: string;
 };
-
 type Resume = {
   basics?: { name?: string; email?: string; website?: string };
   work?: WorkItem[];
@@ -44,7 +37,6 @@ function loadResume(): Resume {
 function pickLastRole(resume: Resume): WorkItem | undefined {
   const work = resume.work ?? [];
   if (work.length === 0) return undefined;
-
   const score = (w: WorkItem) => {
     const e = (w.end || "").toLowerCase();
     if (e === "present") return 9_999_999_9;
@@ -60,32 +52,26 @@ function answerCvQuestion(resume: Resume, q: string): string {
   const question = q.toLowerCase().trim();
   const last = pickLastRole(resume);
 
-  // Q1
+  // Q1: last role/title
   if (/(what|which).*(role|title).*last (position|job|role)/.test(question)) {
     if (!last) return "I couldn't find any work entries.";
     const endLabel = last.end ? ` (${last.end})` : "";
     return `Your last role: ${last.title} at ${last.company}${endLabel}.`;
   }
 
-  // Q2
+  // Q2: list companies
   if (/companies|where.*worked|worked at which companies/.test(question)) {
-    const companies = (resume.work ?? []).map((w) => w.company).filter(Boolean);
-    return companies.length
-      ? `Companies: ${companies.join(", ")}.`
-      : "No companies found.";
+    const companies = (resume.work ?? []).map(w => w.company).filter(Boolean);
+    return companies.length ? `Companies: ${companies.join(", ")}.` : "No companies found.";
   }
 
-  // Q3
+  // Q3: when at <company>
   const mCompany = question.match(/work(ed)? at ([a-z0-9 .&-]+)/i);
   if (mCompany) {
     const c = mCompany[2].trim().toLowerCase();
-    const hit = (resume.work ?? []).find(
-      (w) => (w.company || "").toLowerCase() === c
-    );
+    const hit = (resume.work ?? []).find(w => (w.company || "").toLowerCase() === c);
     if (hit) {
-      return `At ${hit.company}: ${hit.title} — ${hit.start || "?"} to ${
-        hit.end || "?"
-      }.`;
+      return `At ${hit.company}: ${hit.title} — ${hit.start || "?"} to ${hit.end || "?"}.`;
     }
   }
 
@@ -94,7 +80,7 @@ function answerCvQuestion(resume: Resume, q: string): string {
     "• What role did I have at my last position?",
     "• Which companies have I worked at?",
     "• When did I work at <company>?",
-    "Update resume.json to improve answers.",
+    "Update resume.json to improve answers."
   ].join("\n");
 }
 
@@ -113,10 +99,10 @@ async function makeTransport() {
         host: test.smtp.host,
         port: test.smtp.port,
         secure: test.smtp.secure,
-        auth: { user: test.user, pass: test.pass },
+        auth: { user: test.user, pass: test.pass }
       }),
       from: `Demo Sender <${test.user}>`,
-      isTest: true,
+      isTest: true
     };
   }
 
@@ -125,10 +111,10 @@ async function makeTransport() {
       host: SMTP_HOST,
       port: Number(SMTP_PORT || 587),
       secure: false,
-      auth: { user: SMTP_USER, pass: SMTP_PASS },
+      auth: { user: SMTP_USER, pass: SMTP_PASS }
     }),
     from: process.env.SMTP_FROM || process.env.SMTP_USER!,
-    isTest: false,
+    isTest: false
   };
 }
 
@@ -140,31 +126,84 @@ async function sendEmail({ to, subject, body }: SendEmailArgs) {
 }
 
 // ------------------------------
-// Express app + HTTP routes
+// App + MCP (NOTE: no body parser before /mcp)
 // ------------------------------
 const app = express();
-app.use(express.json());
-app.use(cors({ origin: process.env.WEB_ORIGIN || "*" }));
+const server = http.createServer(app);
+const port = Number(process.env.PORT || 8080);
 
 const resume = loadResume();
 
-app.get("/", (_req: Request, res: Response) => {
-  res
-    .type("text/plain")
-    .send(
-      "MCP CV Server: /health, POST /ask, POST /send-email, HTTP MCP at /mcp"
-    );
+// ---- MCP: define tools ----
+const mcpServer = new McpServer({ name: "cv-mcp", version: "0.1.0" });
+
+mcpServer.tool(
+  "ask_cv",
+  { question: z.string() },
+  async ({ question }) => {
+    const ans = answerCvQuestion(resume, question);
+    return { content: [{ type: "text", text: ans }] };
+  }
+);
+
+mcpServer.tool(
+  "send_email",
+  { to: z.string().email(), subject: z.string(), body: z.string() },
+  async ({ to, subject, body }) => {
+    const result = await sendEmail({ to, subject, body });
+    let text = `Queued email: ${result.messageId}`;
+    if (result.isTest && result.previewUrl) text += `\nPreview (Ethereal): ${result.previewUrl}`;
+    return { content: [{ type: "text", text }] };
+  }
+);
+
+// ---- MCP endpoint first (no express.json here) ----
+type SessionMap = Record<string, StreamableHTTPServerTransport>;
+const sessions: SessionMap = {};
+
+app.all("/mcp", async (req, res) => {
+  // The transport requires clients to send:
+  //   Accept: application/json, text/event-stream
+  // Keep this handler BEFORE any body parser.
+
+  const sidHeader = req.header("MCP-Session-Id") || "";
+  let transport = sidHeader ? sessions[sidHeader] : undefined;
+
+  if (!transport) {
+    transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      onsessioninitialized: (newId) => {
+        sessions[newId] = transport!;
+      }
+    });
+    transport.onclose = () => {
+      if (transport?.sessionId) delete sessions[transport.sessionId];
+    };
+    await mcpServer.connect(transport);
+  }
+
+  await transport.handleRequest(req, res); // do NOT read/parse req body before this
 });
 
-app.get("/health", (_req: Request, res: Response) => res.json({ ok: true }));
+// ---- Now it's safe to enable JSON for the REST helpers ----
+app.use(express.json());
 
-app.post("/ask", (req: Request, res: Response) => {
+// Root/help
+app.get("/", (_req, res) => {
+  res
+    .type("text/plain")
+    .send("MCP CV Server: /health, POST /ask, POST /send-email, MCP at /mcp");
+});
+
+app.get("/health", (_req, res) => res.json({ ok: true }));
+
+app.post("/ask", (req, res) => {
   const q = String(req.body?.question || "");
   const ans = answerCvQuestion(resume, q);
   res.json({ question: q, answer: ans });
 });
 
-app.post("/send-email", async (req: Request, res: Response) => {
+app.post("/send-email", async (req, res) => {
   try {
     const { to, subject, body } = req.body || {};
     if (!to || !subject || !body) {
@@ -177,59 +216,6 @@ app.post("/send-email", async (req: Request, res: Response) => {
   }
 });
 
-const server = http.createServer(app);
-const port = Number(process.env.PORT || 8080);
 server.listen(port, () => {
   console.log(`HTTP listening on :${port}`);
-});
-
-// ------------------------------
-// MCP v1.x: tools over HTTP
-// ------------------------------
-const mcpServer = new McpServer({ name: "cv-mcp", version: "0.1.0" });
-
-// Tool: ask_cv
-mcpServer.tool("ask_cv", { question: z.string() }, async ({ question }) => {
-  const ans = answerCvQuestion(resume, question);
-  return { content: [{ type: "text", text: ans }] };
-});
-
-// Tool: send_email
-mcpServer.tool(
-  "send_email",
-  { to: z.string().email(), subject: z.string(), body: z.string() },
-  async ({ to, subject, body }) => {
-    const result = await sendEmail({ to, subject, body });
-    let text = `Queued email: ${result.messageId}`;
-    if (result.isTest && result.previewUrl)
-      text += `\nPreview (Ethereal): ${result.previewUrl}`;
-    return { content: [{ type: "text", text }] };
-  }
-);
-
-// Streamable HTTP transport on /mcp
-type SessionMap = Record<string, StreamableHTTPServerTransport>;
-const sessions: SessionMap = {};
-
-app.all("/mcp", async (req, res) => {
-  // Reuse existing session if header is present
-  const sidHeader = req.header("MCP-Session-Id") || "";
-  let transport = sidHeader ? sessions[sidHeader] : undefined;
-
-  // If no session, create one now—first request should be 'initialize'
-  if (!transport) {
-    transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      onsessioninitialized: (newId) => {
-        sessions[newId] = transport!;
-      },
-    });
-    transport.onclose = () => {
-      if (transport?.sessionId) delete sessions[transport.sessionId];
-    };
-    await mcpServer.connect(transport);
-  }
-
-  // Hand off to the transport; it will validate initialize/tools/calls
-  await transport.handleRequest(req, res);
 });
