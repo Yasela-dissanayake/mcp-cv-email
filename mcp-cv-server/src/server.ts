@@ -15,6 +15,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import cors from "cors";
 
 // ------------------------------
 // Types & tiny resume helpers
@@ -143,10 +144,11 @@ async function sendEmail({ to, subject, body }: SendEmailArgs) {
 // ------------------------------
 const app = express();
 app.use(express.json());
+app.use(cors({ origin: process.env.WEB_ORIGIN || "*" }));
 
 const resume = loadResume();
 
-app.get("/", (_req, res) => {
+app.get("/", (_req: Request, res: Response) => {
   res
     .type("text/plain")
     .send(
@@ -154,15 +156,15 @@ app.get("/", (_req, res) => {
     );
 });
 
-app.get("/health", (_req, res) => res.json({ ok: true }));
+app.get("/health", (_req: Request, res: Response) => res.json({ ok: true }));
 
-app.post("/ask", (req, res) => {
+app.post("/ask", (req: Request, res: Response) => {
   const q = String(req.body?.question || "");
   const ans = answerCvQuestion(resume, q);
   res.json({ question: q, answer: ans });
 });
 
-app.post("/send-email", async (req, res) => {
+app.post("/send-email", async (req: Request, res: Response) => {
   try {
     const { to, subject, body } = req.body || {};
     if (!to || !subject || !body) {
@@ -209,7 +211,7 @@ mcpServer.tool(
 type SessionMap = Record<string, StreamableHTTPServerTransport>;
 const sessions: SessionMap = {};
 
-app.all("/mcp", async (req, res) => {
+app.all("/mcp", async (req: Request, res: Response) => {
   const sid = req.headers["mcp-session-id"] as string | undefined;
   let transport = sid ? sessions[sid] : undefined;
 
