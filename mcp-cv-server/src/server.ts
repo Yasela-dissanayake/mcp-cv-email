@@ -7,11 +7,14 @@ import path from "node:path";
 import nodemailer from "nodemailer";
 import { randomUUID } from "node:crypto";
 
+// Add type annotations for Express
+import type { Request, Response } from "express";
+import { z } from "zod";
+
 // MCP v1.x imports
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
 
 // ------------------------------
 // Types & tiny resume helpers
@@ -94,8 +97,9 @@ function answerCvQuestion(resume: Resume, q: string): string {
   ].join("\n");
 }
 
-// Email (Nodemailer) 
-
+// ------------------------------
+// Email (Nodemailer) — minimal
+// ------------------------------
 type SendEmailArgs = { to: string; subject: string; body: string };
 
 async function makeTransport() {
@@ -134,7 +138,9 @@ async function sendEmail({ to, subject, body }: SendEmailArgs) {
   return { messageId: info.messageId, previewUrl, isTest };
 }
 
-// Express BE 
+// ------------------------------
+// Express app + HTTP routes
+// ------------------------------
 const app = express();
 app.use(express.json());
 
@@ -170,34 +176,13 @@ app.post("/send-email", async (req, res) => {
 });
 
 const server = http.createServer(app);
-const basePort = Number(process.env.PORT || 8080);
+const port = Number(process.env.PORT || 8080);
+server.listen(port, () => {
+  console.log(`HTTP listening on :${port}`);
+});
 
-// Try ports sequentially until we find an available one
-async function startServer(startPort: number): Promise<number> {
-  for (let port = startPort; port < startPort + 10; port++) {
-    try {
-      await new Promise<void>((resolve, reject) => {
-        server.listen(port, () => resolve()).on("error", reject);
-      });
-      return port;
-    } catch (err: any) {
-      if (err.code !== "EADDRINUSE") throw err;
-      console.log(`Port ${port} in use, trying next port...`);
-    }
-  }
-  throw new Error(
-    `Could not find an available port in range ${startPort}-${startPort + 9}`
-  );
-}
-
-startServer(basePort)
-  .then((port) => console.log(`HTTP listening on :${port}`))
-  .catch((err) => {
-    console.error("Failed to start server:", err);
-    process.exit(1);
-  });
-
-// MCP v1
+// ------------------------------
+// MCP v1.x: tools over HTTP
 // ------------------------------
 const mcpServer = new McpServer({ name: "cv-mcp", version: "0.1.0" });
 
