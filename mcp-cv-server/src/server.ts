@@ -211,12 +211,13 @@ mcpServer.tool(
 type SessionMap = Record<string, StreamableHTTPServerTransport>;
 const sessions: SessionMap = {};
 
-app.all("/mcp", async (req: Request, res: Response) => {
-  const sid = req.headers["mcp-session-id"] as string | undefined;
-  let transport = sid ? sessions[sid] : undefined;
+app.all("/mcp", async (req, res) => {
+  // Reuse existing session if header is present
+  const sidHeader = req.header("MCP-Session-Id") || "";
+  let transport = sidHeader ? sessions[sidHeader] : undefined;
 
-  // New session starts with an "initialize" request
-  if (!transport && isInitializeRequest(req.body)) {
+  // If no session, create one now—first request should be 'initialize'
+  if (!transport) {
     transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (newId) => {
@@ -229,12 +230,6 @@ app.all("/mcp", async (req: Request, res: Response) => {
     await mcpServer.connect(transport);
   }
 
-  if (!transport) {
-    res
-      .status(400)
-      .json({ error: "No MCP session. Send initialize request first." });
-    return;
-  }
-
+  // Hand off to the transport; it will validate initialize/tools/calls
   await transport.handleRequest(req, res);
 });
