@@ -1,0 +1,47 @@
+{
+  "basics": {
+    "name": "Yasela Dissanayake",
+    "email": "yasela2014@gmail.com",
+    "website": "https://www.linkedin.com/in/yasela-dissanayake/"
+  },
+  "work": [
+    {
+      "title": "Fullstack Web Developer",
+      "company": "Visual Science UK Ltd",
+      "location": "Leeds, UK",
+      "start": "2023-05",
+      "end": "2025-07",
+      "summary": "Contributed to production web applications; developed and maintained interactive, SEO-optimized WordPress websites; ensured mobile-first design and improved performance."
+    },
+    {
+      "title": "Frontend Developer",
+      "company": "SprintCode Labs",
+      "location": "Sri Lanka",
+      "start": "2023-09",
+      "end": "2024-04",
+      "summary": "Built dynamic, responsive interfaces with React and TypeScript; created reusable modular components; integrated APIs in collaboration with backend teams."
+    }
+  ],
+  "skills": [
+    "React",
+    "Next.js",
+    "TypeScript",
+    "JavaScript",
+    "Tailwind CSS",
+    "Bootstrap",
+    "HTML5",
+    "CSS3",
+    "Node.js",
+    "Express.js",
+    "Git",
+    "GitHub",
+    "Docker",
+    "Solidity",
+    "Ethereum",
+    "IPFS",
+    "Hardhat",
+    "Ethers.js",
+    "Web3.js",
+    "Figma"
+  ]
+}
